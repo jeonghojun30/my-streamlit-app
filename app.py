@@ -50,7 +50,7 @@ with st.sidebar:
                     st.success(f"캘린더 {schedule_count}건, To-do {todo_count}건 등록")
 
     st.divider()
-    recipient_email = st.text_input("수신자 이메일 주소", value=os.getenv("GMAIL_ADDRESS", ""))
+    recipient_email = st.text_input("수신자 이메일 주소", value=os.getenv("RECIPIENT_EMAIL", ""))
     with st.expander("에이블 페르소나 (프롬프트)"):
         sys_role = st.text_area("시스템 역할", value=DEFAULT_SYS_ROLE, height=220)
     if st.button("대화 및 일정 초기화", use_container_width=True):
