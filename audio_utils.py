@@ -1,4 +1,4 @@
-# (출처: 6 - 미션 4. STT / 미션 5. TTS / 7 - 2. 음성 처리 로직)
+# (출처: 6 - 미션 4. STT / 6 - 미션 5. TTS / 7 - 2. 음성 처리 로직)
 from openai import OpenAI
 
 def transcribe_audio(client: OpenAI, audio_file) -> str:
