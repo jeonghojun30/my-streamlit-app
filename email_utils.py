@@ -1,4 +1,4 @@
-# (출처: 6 - 미션 1. 이메일 발송 / 미션 7. 도구 사용)
+# (출처: 6 - 미션 1. 이메일 발송 / 6 - 미션 7. 도구 사용)
 import os
 import smtplib
 from email.mime.text import MIMEText
@@ -27,7 +27,7 @@ def send_email(to: str, subject: str, body: str) -> dict:
     except Exception as e:
         return {"status": "failed", "error": str(e)}
 
-# OpenAI Function Calling에 전달할 도구 명세
+# OpenAI Function Calling에 전달할 도구 명세 (출처: 6 - 미션 7)
 EMAIL_TOOLS = [
     {
         "type": "function",
