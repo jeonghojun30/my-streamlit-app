@@ -24,7 +24,7 @@ if "audio_bytes" not in st.session_state:
 with st.sidebar:
     st.header("⚙️ 비서 설정")
     recipient_email = st.text_input("수신자 이메일 주소", value=os.getenv("GMAIL_ADDRESS", ""))
-    
+
     # (출처: 1 - 7) Expander를 통한 시스템 페르소나 설정
     with st.expander("에이블 페르소나 (프롬프트)"):
         sys_role = st.text_area("시스템 역할", value=DEFAULT_SYS_ROLE, height=220)
