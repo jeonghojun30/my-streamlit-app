@@ -99,10 +99,13 @@ def render_todos() -> None:
     if total:
         st.progress(completed / total)
 
-    for item in list(st.session_state.todos):
+    ordered_todos = sorted(st.session_state.todos,
+                           key=lambda item: (not bool(item.get("due_date")), item.get("due_date", ""), item["task"]))
+    for item in ordered_todos:
         info, action = st.columns([5, 1])
         parent = f"↳ {item['parent']} / " if item.get("parent") else ""
-        label = parent + item["task"] + (f" · {item['assignee']}" if item.get("assignee") else "")
+        date_label = item.get("due_date") or "기한 없음"
+        label = f"{date_label} · {parent}{item['task']}" + (f" · {item['assignee']}" if item.get("assignee") else "")
         with info:
             item["done"] = st.checkbox(label, value=item["done"], key=f"todo_{item['id']}")
         with action:
