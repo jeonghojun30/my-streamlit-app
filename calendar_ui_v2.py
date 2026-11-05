@@ -1,43 +1,43 @@
 """Compact calendar with event labels, manual registration, recommendations and PNG."""
 import calendar
-import hashlib
 import io
 import os
+import html
+from pathlib import Path
 from datetime import date, time
 
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
-from audio_utils import transcribe_audio
 from meeting_planner import add_schedule, add_todo
 
 
-def _todo_sort_key(item):
-    related=" ".join((item.get('assignee',''),item.get('parent',''),item.get('task',item.get('title',''))))
-    kim_first='김대리' not in related.replace(' ','')
-    due=item.get('due_date','')
-    return (kim_first,not bool(due),due,item.get('task',item.get('title','')))
-
-
 def _font(size):
-    for name in (
-        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
-        "/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "C:/Windows/Fonts/malgun.ttf",
-        "/System/Library/Fonts/AppleGothic.ttf",
-    ):
+    for name in (str(Path(__file__).parent / "assets/NanumGothic-Regular.ttf"), "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/nanum/NanumGothic.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
         if os.path.exists(name):
             return ImageFont.truetype(name, size)
-    raise RuntimeError("한글 PNG 글꼴을 찾지 못했습니다. packages.txt의 fonts-nanum을 설치해 주세요.")
+    raise RuntimeError("한글 글꼴이 없습니다. assets/NanumGothic-Regular.ttf를 함께 업로드하세요.")
+
+
+def _wrap(draw, text, font, width):
+    lines, line = [], ""
+    for ch in str(text):
+        if ch == "\n" or draw.textlength(line + ch, font=font) > width:
+            lines.append(line)
+            line = "" if ch == "\n" else ch
+        else:
+            line += ch
+    return lines + [line]
 
 
 def _png(lines, title):
-    image = Image.new("RGB", (950, max(190, 110 + len(lines)*36)), "white")
+    font = _font(20)
+    probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    rows = [row for line in lines for row in _wrap(probe, line, font, 880)]
+    image = Image.new("RGB", (950, max(190, 120 + len(rows)*34)), "white")
     draw = ImageDraw.Draw(image)
     draw.text((25,25), title, font=_font(27), fill="#1f2937")
-    for i, line in enumerate(lines):
-        draw.text((25,90+i*36),str(line)[:85],font=_font(17),fill="#334155")
+    for i, line in enumerate(rows):
+        draw.text((25,90+i*34), line, font=font, fill="#334155")
     out = io.BytesIO()
     image.save(out, format="PNG")
     return out.getvalue()
@@ -45,21 +45,21 @@ def _png(lines, title):
 
 def calendar_png(year, month, events):
     weeks = calendar.monthcalendar(year,month)
-    img = Image.new('RGB',(1120,110+len(weeks)*125),'white')
+    img = Image.new('RGB',(1120,110+len(weeks)*125),'#191b22')
     d=ImageDraw.Draw(img)
-    d.text((20,15),f'ABLE Calendar {year}-{month:02d}',font=_font(28),fill='#1f2937')
+    d.text((20,15),f'ABLE Calendar {year}-{month:02d}',font=_font(28),fill='#f1f5f9')
     for j,wd in enumerate(['월','화','수','목','금','토','일']):
-        d.text((j*160+10,74),wd,font=_font(18),fill='#475569')
+        d.text((j*160+10,74),wd,font=_font(18),fill='#cbd5e1')
     for i,week in enumerate(weeks):
         for j,day in enumerate(week):
             x,y=j*160,110+i*125
-            d.rectangle((x,y,x+159,y+124),outline='#cbd5e1')
+            d.rectangle((x,y,x+159,y+124),outline='#383b49')
             if day:
                 day_string=f'{year}-{month:02d}-{day:02d}'
-                d.text((x+8,y+5),str(day),font=_font(18),fill='#0f172a')
+                d.text((x+8,y+5),str(day),font=_font(18),fill='#f1f5f9')
                 matches=[e for e in events if e['date']==day_string]
                 for k,e in enumerate(matches[:3]):
-                    d.text((x+8,y+32+k*27),(e.get('time','')+' '+e['schedule']).strip()[:12],font=_font(14),fill='#2563eb')
+                    d.text((x+8,y+32+k*27),(e.get('time','')+' '+e['schedule']).strip()[:10],font=_font(14),fill='#9d92ff')
     out=io.BytesIO()
     img.save(out,format='PNG')
     return out.getvalue()
@@ -90,32 +90,36 @@ def render_calendar():
         if month>12:month,year=1,year+1
         st.session_state.calendar_year,st.session_state.calendar_month=year,month
         st.rerun()
-    try:
-        calendar_image=calendar_png(year,month,st.session_state.schedules)
-    except RuntimeError as exc:
-        d.warning(str(exc))
-    else:
-        d.download_button('📥 달력 PNG',calendar_image,file_name='calendar.png',mime='image/png')
+    d.download_button('📥 달력 PNG',calendar_png(year,month,st.session_state.schedules),file_name='calendar.png',mime='image/png',on_click='ignore')
 
-    for col,wd in zip(st.columns(7),['월','화','수','목','금','토','일']):
-        col.markdown(f'**{wd}**')
-    for week in calendar.monthcalendar(year,month):
-        for col,day in zip(st.columns(7,gap='small'),week):
+    # HTML grid provides equal-height cells; date selection stays a native widget.
+    colors = ['#7962d8', '#00a7af', '#4d68ed', '#dd3f8d', '#e99838']
+    cells = ''.join(f'<div class="weekday">{wd}</div>' for wd in ['월','화','수','목','금','토','일'])
+    for week in calendar.monthcalendar(year, month):
+        for day in week:
             if not day:
-                col.write(' ')
+                cells += '<div class="day muted"></div>'
                 continue
-            current=date(year,month,day)
-            matches=[e for e in st.session_state.schedules if e['date']==current.isoformat()]
-            with col:
-                if st.button(str(day),key=f'date_{current}',use_container_width=True):
-                    st.session_state.selected_date=current
-                    st.rerun()
-                for item in matches[:3]:
-                    st.caption('📌 '+(item.get('time','')+' '+item['schedule']).strip())
-                if len(matches)>3:st.caption(f'외 {len(matches)-3}개')
+            current = date(year, month, day)
+            matches = [e for e in st.session_state.schedules if e['date'] == current.isoformat()]
+            selected = ' selected' if current == st.session_state.selected_date else ''
+            labels = ''.join(f'<div class="event" style="background:{colors[i%5]}" title="{html.escape(e["schedule"], quote=True)}">{html.escape((e.get("time", "") + " " + e["schedule"]).strip())}</div>' for i,e in enumerate(matches[:3]))
+            if len(matches)>3: labels += f'<small>+{len(matches)-3}개</small>'
+            cells += f'<div class="day{selected}"><span>{day}</span>{labels}</div>'
+    st.markdown('<div class="able-calendar">'+cells+'</div>', unsafe_allow_html=True)
+    selected = st.date_input('상세 일정을 볼 날짜', value=st.session_state.selected_date)
+    if selected != st.session_state.selected_date:
+        st.session_state.selected_date = selected
+        st.session_state.calendar_year, st.session_state.calendar_month = selected.year, selected.month
+        st.rerun()
+    with st.expander('이번 달 일정 목록', expanded=True):
+        events = sorted([e for e in st.session_state.schedules if e['date'].startswith(f'{year}-{month:02d}')], key=lambda e:(e['date'],e.get('time','')))
+        for i,e in enumerate(events):
+            st.markdown(f'<div class="agenda" style="border-left-color:{colors[i%5]}">{html.escape(e["date"] + " · " + e.get("time", "") + " " + e["schedule"])}</div>', unsafe_allow_html=True)
+        if not events: st.caption('등록된 일정이 없습니다. 아래에서 일정을 추가하세요.')
 
 
-def render_details(client=None):
+def render_details():
     selected=st.session_state.selected_date
     left,right=st.columns([1.1,1],gap='medium')
     with left:
@@ -128,93 +132,67 @@ def render_details(client=None):
             if b.button('삭제',key=f'del_schedule_{item["id"]}'):
                 st.session_state.schedules.remove(item)
                 st.rerun()
+        voice_entry('schedule')
         has_time=st.checkbox('시간 지정',key='has_time')
-        voice=st.audio_input('일정 내용을 음성으로 입력',key=f'schedule_voice_{selected.isoformat()}')
         with st.form('schedule_form',clear_on_submit=True):
-            title=st.text_input('일정 내용 (음성만 녹음한 경우 비워 두세요)')
+            title=st.text_input('일정 내용',key='schedule_draft')
             when=st.time_input('일정 시간',value=time(9,0)) if has_time else None
             submitted=st.form_submit_button('선택한 날짜에 등록')
         if submitted:
             try:
-                if not title.strip() and voice is not None:
-                    if client is None:
-                        raise ValueError('음성 인식 클라이언트를 사용할 수 없습니다.')
-                    title=transcribe_audio(client(),voice.getvalue()).strip()
                 if add_schedule(title,selected.isoformat(),when.strftime('%H:%M') if when else ''):
                     st.session_state.calendar_recommendations=_recommended(title)
                     st.rerun()
                 st.info('이미 등록된 일정입니다.')
             except ValueError as exc:
                 st.warning(str(exc))
-            except Exception as exc:
-                st.error(f'음성 인식 오류: {exc}')
     with right:
         st.subheader('💡 추천 To-do List')
         analysis=st.session_state.get('meeting_analysis') or {}
-        recs=[{'title':x['title'],'assignee':x.get('assignee',''),'parent':x.get('parent',''),'due_date':x.get('due_date','')} for x in analysis.get('todos',[])]
-        recs += [{'title':x['title'],'assignee':x.get('assignee',''),'parent':x.get('parent',''),'due_date':x.get('date','')} for x in analysis.get('schedules',[]) if x.get('parent','').strip()]
-        recs += [{'title':x,'assignee':'','parent':'','due_date':''} for x in st.session_state.calendar_recommendations]
-        recs.sort(key=_todo_sort_key)
+        recs=[{'title':x['title'],'assignee':x.get('assignee',''),'parent':x.get('parent','')} for x in analysis.get('todos',[])]
+        recs += [{'title':x,'assignee':'','parent':''} for x in st.session_state.calendar_recommendations]
         if not recs:st.caption('회의록 분석 또는 일정 등록 후 추천이 나타납니다.')
         for i,item in enumerate(recs):
             a,b=st.columns([5,1])
-            date_label=item['due_date'] or '기한 없음'
-            parent=f"{item['parent']} / " if item['parent'] else ''
-            a.write(f"• {date_label} · {parent}{item['title']}")
+            a.write('• '+item['title'])
             if b.button('추가',key=f'add_rec_{i}'):
-                try:
-                    add_todo(item['title'],item['assignee'],item['parent'],item['due_date'])
-                except ValueError as exc:
-                    st.warning(str(exc))
-                    continue
+                add_todo(item['title'],item['assignee'],item['parent'])
                 st.rerun()
 
 
-def render_todos(client_factory):
+def render_todos():
     st.subheader('✅ My To-do List')
+    voice_entry('todo')
     with st.form('todo_form',clear_on_submit=True):
-        title=st.text_input('새로운 할 일')
+        title=st.text_input('새로운 할 일',key='todo_draft')
         submit=st.form_submit_button('업무 추가')
     if submit:
         try:
             if add_todo(title):st.rerun()
         except ValueError as exc:st.warning(str(exc))
-    st.markdown('🎙️ **음성으로 할 일 추가**')
-    voice=st.audio_input('할 일을 녹음하세요',key='todo_voice')
-    if voice is not None:
-        voice_bytes=voice.getvalue()
-        voice_id=hashlib.sha256(voice_bytes).hexdigest()
-        if st.session_state.get('todo_voice_processed') != voice_id:
-            st.session_state.todo_voice_processed=voice_id
-            try:
-                with st.spinner('음성을 텍스트로 변환 중입니다...'):
-                    recognized=transcribe_audio(client_factory(),voice_bytes).strip()
-                if recognized:
-                    if add_todo(recognized):
-                        st.rerun()
-                    else:
-                        st.info('이미 등록된 할 일입니다.')
-                else:
-                    st.warning('음성에서 할 일을 인식하지 못했습니다. 다시 녹음해 주세요.')
-            except Exception as exc:
-                st.error(f'할 일 음성 인식 오류: {exc}')
     total=len(st.session_state.todos)
     done=sum(x['done'] for x in st.session_state.todos)
     st.caption(f'완료 {done}/{total}')
-    if total:st.progress(done/total)
-    else:st.info('할 일을 입력하거나 음성으로 추가해 보세요.')
-    ordered_todos=sorted(st.session_state.todos,key=_todo_sort_key)
-    for item in ordered_todos:
-        a,b=st.columns([5,1])
-        label=f"{item.get('due_date') or '기한 없음'} · {item['task']}"
-        item['done']=a.checkbox(label,value=item['done'],key=f'todo_{item["id"]}')
-        if b.button('❌',key=f'del_todo_{item["id"]}'):
+    for item in list(st.session_state.todos):
+        a,b=st.columns([4,2])
+        item['done']=a.checkbox(item['task'],value=item['done'],key=f'todo_{item["id"]}')
+        if b.button('삭제',key=f'del_todo_{item["id"]}'):
             st.session_state.todos.remove(item)
             st.rerun()
-    lines=[('[완료]' if x['done'] else '[미완료]')+' '+(x.get('due_date') or '기한 없음')+' · '+x['task'] for x in ordered_todos]
-    try:
-        png=_png(lines,'My To-do List')
-    except RuntimeError as exc:
-        st.warning(str(exc))
-    else:
-        st.download_button('📥 To-do PNG',png,file_name='todos.png',mime='image/png')
+    lines=[('[완료]' if x['done'] else '[미완료]')+' '+x['task'] for x in st.session_state.todos]
+    st.download_button('📥 To-do PNG',_png(lines,'My To-do List'),file_name='todos.png',mime='image/png',on_click='ignore')
+
+
+def voice_entry(kind):
+    from openai import OpenAI
+    from audio_utils import transcribe_audio
+    with st.expander('음성으로 내용 입력'):
+        audio = st.audio_input('녹음 후 텍스트로 변환하세요', key=f'{kind}_audio')
+        if st.button('녹음 내용 변환', key=f'{kind}_transcribe', disabled=audio is None):
+            try:
+                with st.spinner('음성 인식 중...'):
+                    audio.seek(0)
+                    st.session_state[f'{kind}_draft'] = transcribe_audio(OpenAI(), audio)
+                st.success('아래 입력란을 확인한 후 등록하세요.')
+            except Exception as exc:
+                st.error(f'음성 인식 실패: {exc}')
