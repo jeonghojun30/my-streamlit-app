@@ -18,6 +18,6 @@ def text_to_speech(client: OpenAI, text: str) -> bytes:
     response = client.audio.speech.create(
         model="tts-1",
         voice="alloy",
-        input=text[:4000]  # 음성 모델 입력 한도 내에서 요약 전체를 읽습니다.
+        input=text[:1000]  # 브라우저 재생 지연 방지를 위해 최대 1000자 제한
     )
     return response.content
