@@ -1,40 +1,20 @@
 """호준님 비서 로직 + 개선된 일정/To-do 화면의 통합 진입점."""
 import hashlib
 import os
-from pathlib import Path
-from audio_utils import text_to_speech
 
 import streamlit as st
 from openai import OpenAI
 
 from app_state import initialize_state, reset_state, save_response
 from assistant import ASSISTANT_BUILD, DEFAULT_SYS_ROLE
+from audio_utils import text_to_speech
 from calendar_ui_v2 import render_calendar, render_details, render_todos
 from command_service import MissingInputError, run_command
-from meeting_planner import analyze_meeting
+from meeting_planner import analyze_meeting, save_calendar_schedules
 from meeting_utils import update_meeting_file
 
 st.set_page_config(page_title="AI 개인비서 에이블",page_icon="🤖",layout="wide")
 initialize_state()
-# Streamlit Secrets and local environment use the same configuration names.
-try:
-    for key in ('OPENAI_API_KEY','GMAIL_ADDRESS','GMAIL_APP_PASSWORD','RECIPIENT_EMAIL'):
-        if key in st.secrets:
-            os.environ[key] = str(st.secrets[key])
-except FileNotFoundError:
-    pass
-st.markdown("""<style>
-.stApp {background:#14161c;color:#eef0f6}
-[data-testid="stSidebar"] {background:#202229}
-.able-calendar {display:grid;grid-template-columns:repeat(7,minmax(0,1fr));background:#1c1e25;border:1px solid #383b49;border-radius:12px;overflow:hidden}
-.weekday {text-align:center;padding:16px 2px;color:#b7b8cb;font-size:13px}
-.day {min-height:116px;padding:8px;border-top:1px solid #30333e;border-right:1px solid #30333e;overflow:hidden}
-.day.selected {background:#302b48;box-shadow:inset 0 0 0 2px #9e8cff}
-.day span {display:block;margin-bottom:9px;font-size:13px}
-.event {border-radius:10px;padding:4px 7px;margin:4px 0;color:white;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.agenda {background:#252731;border-left:5px solid;padding:12px;margin:7px 0;border-radius:7px}
-@media(max-width:700px){.day{min-height:90px;padding:3px}.event{padding:3px;font-size:10px}}
-</style>""",unsafe_allow_html=True)
 
 # 호준님 파일의 사이드바·멀티턴 처리 방식을 유지합니다.
 with st.sidebar:
@@ -58,12 +38,22 @@ with st.sidebar:
         if st.session_state.get('meeting_analysis_hash') != file_key:
             with st.spinner('회의록 분석 중...'):
                 try:
-                    analysis=analyze_meeting(OpenAI(),meeting_content)
+                    client=OpenAI()
+                    analysis=analyze_meeting(client,meeting_content)
                     st.session_state.meeting_analysis=analysis
                     st.session_state.meeting_summary=analysis.get('summary','')
-                    st.session_state.meeting_questions=analysis.get('questions',[])
+                    saved_schedules=save_calendar_schedules(analysis,file_key)
                     st.session_state.meeting_analysis_hash=file_key
-                    st.success('분석 완료! 가운데 추천 목록을 확인해 주세요.')
+                    st.session_state.meeting_summary_audio=None
+                    st.session_state.meeting_summary_audio_error=""
+                    st.session_state.meeting_summary_autoplay=False
+                    if st.session_state.meeting_summary:
+                        try:
+                            st.session_state.meeting_summary_audio=text_to_speech(client,st.session_state.meeting_summary)
+                            st.session_state.meeting_summary_autoplay=True
+                        except Exception as exc:
+                            st.session_state.meeting_summary_audio_error=str(exc)
+                    st.success(f'분석 완료! 일정 {saved_schedules}건을 캘린더에 등록했습니다. 추천 To-do를 확인해 주세요.')
                 except Exception as exc:
                     st.error(f'회의록 분석 오류: {exc}')
 
@@ -71,14 +61,14 @@ with st.sidebar:
     recipient_email=st.text_input("수신자 이메일 주소",value=os.getenv('RECIPIENT_EMAIL',''))
     with st.expander('에이블 페르소나 (프롬프트)'):
         sys_role=st.text_area('시스템 역할',value=DEFAULT_SYS_ROLE,height=220)
-    if st.button('대화 및 일정 초기화',width='stretch'):
+    if st.button('대화 및 일정 초기화',use_container_width=True):
         reset_state()
         st.session_state.meeting_analysis_hash=None
         st.rerun()
     with st.form('command_form'):
         text_query=st.text_input('텍스트 질문/명령')
         audio_query=st.audio_input('음성으로 질문하기')
-        submitted=st.form_submit_button('실행하기',width='stretch')
+        submitted=st.form_submit_button('실행하기',use_container_width=True)
 
 if submitted:
     if not text_query.strip() and audio_query is None:
@@ -101,44 +91,28 @@ if submitted:
                 if result.audio_error:
                     st.warning(f'음성 응답 생성 오류: {result.audio_error}')
 
-hero, title_col = st.columns([1,3])
-with hero:
-    st.image(str(Path(__file__).parent / 'assets/able.png'), width='stretch')
-with title_col:
-    st.title('ABLE · 에이블')
-    st.write('회의를 정리하고, 일정과 할 일을 함께 챙기는 우리 팀 AI 비서')
-st.caption('회의록을 업로드하면 오른쪽에 요약, 달력과 추천 To-do가 표시됩니다.')
+st.title('🗓️ ABLE 일정 및 업무 관리')
+st.caption('회의록을 업로드하면 오른쪽에 요약, 가운데에 마감 일정 후보와 추천 To-do가 표시됩니다.')
 
 # 왼쪽 사이드바 / 가운데 넓은 영역 / 오른쪽 좁은 영역
 main,right=st.columns([3.6,1.15],gap='large')
 with main:
     render_calendar()
     st.divider()
-    render_details()
+    render_details(OpenAI)
 with right:
     st.subheader('📋 회의 요약')
     if st.session_state.meeting_summary:
-        summary = st.session_state.meeting_summary
-        st.write(summary)
-        digest = hashlib.sha256(summary.encode()).hexdigest()
-        # Retry only on request after a TTS failure; reuse speech on every rerun.
-        if st.session_state.get('summary_tts_hash') != digest:
-            st.session_state.summary_tts_hash = digest
-            st.session_state.summary_tts_audio = None
-            try:
-                st.session_state.summary_tts_audio = text_to_speech(OpenAI(), summary)
-                st.session_state.summary_tts_pending = True
-                st.session_state.summary_tts_error = None
-            except Exception as exc:
-                st.session_state.summary_tts_error = str(exc)
-        if st.session_state.get('summary_tts_audio'):
-            st.audio(st.session_state.summary_tts_audio,format='audio/mp3',autoplay=st.session_state.pop('summary_tts_pending',False))
-            st.caption('자동 재생이 차단되면 위 재생 버튼을 눌러주세요.')
-        elif st.session_state.get('summary_tts_error'):
-            st.warning('요약 음성 생성에 실패했습니다. API 설정을 확인해 주세요.')
-            if st.button('요약 음성 다시 생성'):
-                st.session_state.summary_tts_hash = None
-                st.rerun()
+        st.write(st.session_state.meeting_summary)
+        if st.session_state.meeting_summary_audio:
+            st.audio(st.session_state.meeting_summary_audio,format='audio/mp3',autoplay=st.session_state.meeting_summary_autoplay)
+            st.session_state.meeting_summary_autoplay=False
+        if st.session_state.meeting_summary_audio_error:
+            st.warning(f"요약 음성 생성 오류: {st.session_state.meeting_summary_audio_error}")
+        if st.session_state.meeting_questions:
+            with st.expander('확인 필요한 사항'):
+                for question in st.session_state.meeting_questions:
+                    st.write('• '+question)
     else:
         st.info('회의록을 업로드하면 요약이 바로 나타납니다.')
     st.divider()
@@ -149,12 +123,9 @@ st.subheader('💬 에이블의 답변')
 if st.session_state.audio_bytes:
     st.audio(st.session_state.audio_bytes,format='audio/mp3')
 if st.session_state.messages:
-    # Reverse turns for display only; preserve chronological LLM history.
-    turns = [st.session_state.messages[i:i+2] for i in range(0,len(st.session_state.messages),2)]
-    for turn in reversed(turns):
-        for message in turn:
-            with st.chat_message(message['role']):
-                st.write(message['content'])
+    for message in st.session_state.messages:
+        with st.chat_message(message['role']):
+            st.write(message['content'])
 else:
     st.info('사이드바에서 텍스트 또는 음성 명령을 실행하면 답변이 표시됩니다.')
 
