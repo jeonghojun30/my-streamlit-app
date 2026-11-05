@@ -7,9 +7,10 @@ from openai import OpenAI
 
 from app_state import initialize_state, reset_state, save_response
 from assistant import ASSISTANT_BUILD, DEFAULT_SYS_ROLE
+from audio_utils import text_to_speech
 from calendar_ui_v2 import render_calendar, render_details, render_todos
 from command_service import MissingInputError, run_command
-from meeting_planner import analyze_meeting
+from meeting_planner import analyze_meeting, save_calendar_schedules
 from meeting_utils import update_meeting_file
 
 st.set_page_config(page_title="AI 개인비서 에이블",page_icon="🤖",layout="wide")
@@ -37,12 +38,22 @@ with st.sidebar:
         if st.session_state.get('meeting_analysis_hash') != file_key:
             with st.spinner('회의록 분석 중...'):
                 try:
-                    analysis=analyze_meeting(OpenAI(),meeting_content)
+                    client=OpenAI()
+                    analysis=analyze_meeting(client,meeting_content)
                     st.session_state.meeting_analysis=analysis
                     st.session_state.meeting_summary=analysis.get('summary','')
-                    st.session_state.meeting_questions=analysis.get('questions',[])
+                    saved_schedules=save_calendar_schedules(analysis,file_key)
                     st.session_state.meeting_analysis_hash=file_key
-                    st.success('분석 완료! 가운데 추천 목록을 확인해 주세요.')
+                    st.session_state.meeting_summary_audio=None
+                    st.session_state.meeting_summary_audio_error=""
+                    st.session_state.meeting_summary_autoplay=False
+                    if st.session_state.meeting_summary:
+                        try:
+                            st.session_state.meeting_summary_audio=text_to_speech(client,st.session_state.meeting_summary)
+                            st.session_state.meeting_summary_autoplay=True
+                        except Exception as exc:
+                            st.session_state.meeting_summary_audio_error=str(exc)
+                    st.success(f'분석 완료! 일정 {saved_schedules}건을 캘린더에 등록했습니다. 추천 To-do를 확인해 주세요.')
                 except Exception as exc:
                     st.error(f'회의록 분석 오류: {exc}')
 
@@ -88,11 +99,20 @@ main,right=st.columns([3.6,1.15],gap='large')
 with main:
     render_calendar()
     st.divider()
-    render_details()
+    render_details(OpenAI)
 with right:
     st.subheader('📋 회의 요약')
     if st.session_state.meeting_summary:
         st.write(st.session_state.meeting_summary)
+        if st.session_state.meeting_summary_audio:
+            st.audio(st.session_state.meeting_summary_audio,format='audio/mp3',autoplay=st.session_state.meeting_summary_autoplay)
+            st.session_state.meeting_summary_autoplay=False
+        if st.session_state.meeting_summary_audio_error:
+            st.warning(f"요약 음성 생성 오류: {st.session_state.meeting_summary_audio_error}")
+        if st.session_state.meeting_questions:
+            with st.expander('확인 필요한 사항'):
+                for question in st.session_state.meeting_questions:
+                    st.write('• '+question)
     else:
         st.info('회의록을 업로드하면 요약이 바로 나타납니다.')
     st.divider()
