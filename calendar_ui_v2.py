@@ -1,5 +1,6 @@
 """Compact calendar with event labels, manual registration, recommendations and PNG."""
 import calendar
+import hashlib
 import io
 import os
 from datetime import date, time
@@ -169,7 +170,7 @@ def render_details(client=None):
                 st.rerun()
 
 
-def render_todos():
+def render_todos(client_factory):
     st.subheader('✅ My To-do List')
     with st.form('todo_form',clear_on_submit=True):
         title=st.text_input('새로운 할 일')
@@ -178,10 +179,30 @@ def render_todos():
         try:
             if add_todo(title):st.rerun()
         except ValueError as exc:st.warning(str(exc))
+    st.markdown('🎙️ **음성으로 할 일 추가**')
+    voice=st.audio_input('할 일을 녹음하세요',key='todo_voice')
+    if voice is not None:
+        voice_bytes=voice.getvalue()
+        voice_id=hashlib.sha256(voice_bytes).hexdigest()
+        if st.session_state.get('todo_voice_processed') != voice_id:
+            st.session_state.todo_voice_processed=voice_id
+            try:
+                with st.spinner('음성을 텍스트로 변환 중입니다...'):
+                    recognized=transcribe_audio(client_factory(),voice_bytes).strip()
+                if recognized:
+                    if add_todo(recognized):
+                        st.rerun()
+                    else:
+                        st.info('이미 등록된 할 일입니다.')
+                else:
+                    st.warning('음성에서 할 일을 인식하지 못했습니다. 다시 녹음해 주세요.')
+            except Exception as exc:
+                st.error(f'할 일 음성 인식 오류: {exc}')
     total=len(st.session_state.todos)
     done=sum(x['done'] for x in st.session_state.todos)
     st.caption(f'완료 {done}/{total}')
     if total:st.progress(done/total)
+    else:st.info('할 일을 입력하거나 음성으로 추가해 보세요.')
     ordered_todos=sorted(st.session_state.todos,key=_todo_sort_key)
     for item in ordered_todos:
         a,b=st.columns([5,1])
