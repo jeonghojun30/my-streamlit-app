@@ -116,7 +116,7 @@ with right:
     else:
         st.info('회의록을 업로드하면 요약이 바로 나타납니다.')
     st.divider()
-    render_todos()
+    render_todos(OpenAI)
 
 st.divider()
 st.subheader('💬 에이블의 답변')
