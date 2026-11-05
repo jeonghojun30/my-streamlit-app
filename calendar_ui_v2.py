@@ -6,14 +6,29 @@ from datetime import date, time
 
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
+from audio_utils import transcribe_audio
 from meeting_planner import add_schedule, add_todo
 
 
+def _todo_sort_key(item):
+    related=" ".join((item.get('assignee',''),item.get('parent',''),item.get('task',item.get('title',''))))
+    kim_first='김대리' not in related.replace(' ','')
+    due=item.get('due_date','')
+    return (kim_first,not bool(due),due,item.get('task',item.get('title','')))
+
+
 def _font(size):
-    for name in ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/nanum/NanumGothic.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
+    for name in (
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+        "/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "C:/Windows/Fonts/malgun.ttf",
+        "/System/Library/Fonts/AppleGothic.ttf",
+    ):
         if os.path.exists(name):
             return ImageFont.truetype(name, size)
-    return ImageFont.load_default()
+    raise RuntimeError("한글 PNG 글꼴을 찾지 못했습니다. packages.txt의 fonts-nanum을 설치해 주세요.")
 
 
 def _png(lines, title):
@@ -74,7 +89,12 @@ def render_calendar():
         if month>12:month,year=1,year+1
         st.session_state.calendar_year,st.session_state.calendar_month=year,month
         st.rerun()
-    d.download_button('📥 달력 PNG',calendar_png(year,month,st.session_state.schedules),file_name='calendar.png',mime='image/png')
+    try:
+        calendar_image=calendar_png(year,month,st.session_state.schedules)
+    except RuntimeError as exc:
+        d.warning(str(exc))
+    else:
+        d.download_button('📥 달력 PNG',calendar_image,file_name='calendar.png',mime='image/png')
 
     for col,wd in zip(st.columns(7),['월','화','수','목','금','토','일']):
         col.markdown(f'**{wd}**')
@@ -94,7 +114,7 @@ def render_calendar():
                 if len(matches)>3:st.caption(f'외 {len(matches)-3}개')
 
 
-def render_details():
+def render_details(client=None):
     selected=st.session_state.selected_date
     left,right=st.columns([1.1,1],gap='medium')
     with left:
@@ -108,49 +128,45 @@ def render_details():
                 st.session_state.schedules.remove(item)
                 st.rerun()
         has_time=st.checkbox('시간 지정',key='has_time')
+        voice=st.audio_input('일정 내용을 음성으로 입력',key=f'schedule_voice_{selected.isoformat()}')
         with st.form('schedule_form',clear_on_submit=True):
-            title=st.text_input('일정 내용')
+            title=st.text_input('일정 내용 (음성만 녹음한 경우 비워 두세요)')
             when=st.time_input('일정 시간',value=time(9,0)) if has_time else None
             submitted=st.form_submit_button('선택한 날짜에 등록')
         if submitted:
             try:
+                if not title.strip() and voice is not None:
+                    if client is None:
+                        raise ValueError('음성 인식 클라이언트를 사용할 수 없습니다.')
+                    title=transcribe_audio(client(),voice.getvalue()).strip()
                 if add_schedule(title,selected.isoformat(),when.strftime('%H:%M') if when else ''):
                     st.session_state.calendar_recommendations=_recommended(title)
                     st.rerun()
                 st.info('이미 등록된 일정입니다.')
             except ValueError as exc:
                 st.warning(str(exc))
+            except Exception as exc:
+                st.error(f'음성 인식 오류: {exc}')
     with right:
         st.subheader('💡 추천 To-do List')
         analysis=st.session_state.get('meeting_analysis') or {}
-        recs=[{'title':x['title'],'assignee':x.get('assignee',''),'parent':x.get('parent','')} for x in analysis.get('todos',[])]
-        recs += [{'title':x,'assignee':'','parent':''} for x in st.session_state.calendar_recommendations]
+        recs=[{'title':x['title'],'assignee':x.get('assignee',''),'parent':x.get('parent',''),'due_date':x.get('due_date','')} for x in analysis.get('todos',[])]
+        recs += [{'title':x['title'],'assignee':x.get('assignee',''),'parent':x.get('parent',''),'due_date':x.get('date','')} for x in analysis.get('schedules',[]) if x.get('parent','').strip()]
+        recs += [{'title':x,'assignee':'','parent':'','due_date':''} for x in st.session_state.calendar_recommendations]
+        recs.sort(key=_todo_sort_key)
         if not recs:st.caption('회의록 분석 또는 일정 등록 후 추천이 나타납니다.')
         for i,item in enumerate(recs):
             a,b=st.columns([5,1])
-            a.write('• '+item['title'])
+            date_label=item['due_date'] or '기한 없음'
+            parent=f"{item['parent']} / " if item['parent'] else ''
+            a.write(f"• {date_label} · {parent}{item['title']}")
             if b.button('추가',key=f'add_rec_{i}'):
-                add_todo(item['title'],item['assignee'],item['parent'])
+                try:
+                    add_todo(item['title'],item['assignee'],item['parent'],item['due_date'])
+                except ValueError as exc:
+                    st.warning(str(exc))
+                    continue
                 st.rerun()
-        st.divider()
-        st.subheader('📄 회의록 분석 결과')
-        if not analysis:
-            st.info('회의록을 올리면 분석 결과가 여기에 표시됩니다.')
-        else:
-            st.write(analysis.get('summary',''))
-            st.markdown('**캘린더 등록 후보**')
-            for i,item in enumerate(analysis.get('schedules',[])):
-                a,b=st.columns([5,1])
-                a.write(f"{item['date']} · {item['title']}")
-                if b.button('등록',key=f'meeting_schedule_{i}'):
-                    try:
-                        add_schedule(item['title'],item['date'],item.get('time',''),item.get('assignee',''),item.get('parent',''))
-                        st.rerun()
-                    except (ValueError,TypeError) as exc:
-                        st.warning(str(exc))
-            if analysis.get('questions'):
-                with st.expander('확인 필요한 사항'):
-                    for question in analysis['questions']:st.write('• '+question)
 
 
 def render_todos():
@@ -166,11 +182,18 @@ def render_todos():
     done=sum(x['done'] for x in st.session_state.todos)
     st.caption(f'완료 {done}/{total}')
     if total:st.progress(done/total)
-    for item in list(st.session_state.todos):
+    ordered_todos=sorted(st.session_state.todos,key=_todo_sort_key)
+    for item in ordered_todos:
         a,b=st.columns([5,1])
-        item['done']=a.checkbox(item['task'],value=item['done'],key=f'todo_{item["id"]}')
+        label=f"{item.get('due_date') or '기한 없음'} · {item['task']}"
+        item['done']=a.checkbox(label,value=item['done'],key=f'todo_{item["id"]}')
         if b.button('❌',key=f'del_todo_{item["id"]}'):
             st.session_state.todos.remove(item)
             st.rerun()
-    lines=[('[완료]' if x['done'] else '[미완료]')+' '+x['task'] for x in st.session_state.todos]
-    st.download_button('📥 To-do PNG',_png(lines,'My To-do List'),file_name='todos.png',mime='image/png')
+    lines=[('[완료]' if x['done'] else '[미완료]')+' '+(x.get('due_date') or '기한 없음')+' · '+x['task'] for x in ordered_todos]
+    try:
+        png=_png(lines,'My To-do List')
+    except RuntimeError as exc:
+        st.warning(str(exc))
+    else:
+        st.download_button('📥 To-do PNG',png,file_name='todos.png',mime='image/png')
