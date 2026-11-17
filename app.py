@@ -4124,6 +4124,19 @@ def dashboard_styles():
       .st-key-dashboard_roadmap, .st-key-dashboard_suggestions, .st-key-dashboard_chat, .st-key-dashboard_quiz {
         box-shadow: 0 1px 2px #5a473a0c;
       }
+      .st-key-dashboard_roadmap [data-testid="stImage"] {
+    width: min(100%, 1200px) !important;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.st-key-dashboard_roadmap [data-testid="stImage"] img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    object-fit: contain;
+}
       .st-key-dashboard_roadmap h3, .st-key-dashboard_chat h3, .st-key-dashboard_quiz h3 {
         font-size: clamp(1rem, 1.5vw, 1.22rem);
         padding-top: 0;
@@ -4742,7 +4755,7 @@ def render_roadmap(is_applicant):
         return None, None
     png = state.get("roadmap_image")
     if png:
-        st.image(png, width=1200, caption="백서에 기반한 개인 준비 제안")
+      st.image(png, width="stretch", caption="백서에 기반한 개인 준비 제안")
     elif state.get("roadmap_image_error"):
         st.caption(state.roadmap_image_error)
     if plan.get("summary"):
